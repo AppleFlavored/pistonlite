@@ -88,6 +88,7 @@ suspend fun handleClient(socket: Socket) {
 
         if (packetSize == -1) {
             println("Invalid packet size for packet ID: $packetId")
+            sendPacket(writeChannel, DisconnectPlayer("Invalid packet size for packet ID: $packetId"))
             break
         }
 

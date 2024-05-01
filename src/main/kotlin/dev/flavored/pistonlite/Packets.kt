@@ -111,3 +111,15 @@ class SetPositionAndRotation(
 
     override fun getPacketSize(): Int = 10
 }
+
+class DisconnectPlayer(
+    private val reason: String
+): SendablePacket {
+    override fun write(buffer: ByteBuffer) {
+        assert(buffer.capacity() >= 65)
+        buffer.put(0x0E) // Packet ID
+        buffer.putString(reason)
+    }
+
+    override fun getPacketSize(): Int = 65
+}
