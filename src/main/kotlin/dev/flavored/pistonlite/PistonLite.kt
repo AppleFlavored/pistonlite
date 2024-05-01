@@ -52,7 +52,7 @@ suspend fun handlePacket(writeChannel: ByteWriteChannel, packetId: Byte, buffer:
                 val compressionOutput = ByteArrayOutputStream()
                 val outputStream = GZIPOutputStream(compressionOutput)
 
-                val worldSize = world.width * world.length * world.height
+                val worldSize = world.width * world.depth * world.height
                 outputStream.write(worldSize shr 24)
                 outputStream.write(worldSize shr 16)
                 outputStream.write(worldSize shr 8)
@@ -71,8 +71,8 @@ suspend fun handlePacket(writeChannel: ByteWriteChannel, packetId: Byte, buffer:
                 }
             }
 
-            sendPacket(writeChannel, LevelFinalize(world.width.toShort(), world.height.toShort(), world.length.toShort()))
-            sendPacket(writeChannel, SpawnPlayer(-1, username, 0, 0, 0, 0, 0))
+            sendPacket(writeChannel, LevelFinalize(world.width.toShort(), world.height.toShort(), world.depth.toShort()))
+            sendPacket(writeChannel, SpawnPlayer(-1, username, (world.width / 2 shl 5).toShort(), (world.height + 1 shl 5).toShort(), (world.depth / 2 shl 5).toShort(), 0, 0))
         }
     }
 }
@@ -107,8 +107,10 @@ fun main(args: Array<String>) = runBlocking {
     val serverSocket = aSocket(selectorManager).tcp().bind("0.0.0.0", 25565)
 
     for (i in 0 until world.width) {
-        for (j in 0 until world.length) {
-            world[i, 0, j] = Block.GRASS
+        for (j in 0 until world.depth) {
+            for (k in 0 until world.height / 2) {
+                world[i, k, j] = Block.GRASS
+            }
         }
     }
 
