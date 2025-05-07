@@ -1,10 +1,12 @@
 import { ArrayBufferSink, type SocketHandler } from "bun";
-import { PlayerIdentification, DisconnectPlayer, LevelDataChunk, LevelFinalize, LevelInitialize, Ping, ServerIdentification, SetBlockC2S, SetBlockS2C, SpawnPlayer, PositionAndOrientation, Message, UpdateUserType, DespawnPlayer } from "./network";
+import { PlayerIdentification, DisconnectPlayer, LevelDataChunk, LevelFinalize, LevelInitialize, Ping, ServerIdentification, SetBlockC2S, SetBlockS2C, SpawnPlayer, PositionAndOrientation, Message, UpdateUserType, DespawnPlayer, ExtInfo, ExtEntry } from "./network";
 import { Block, World } from "./world";
+import type { Extension } from "./extensions";
 
 export interface ServerOptions {
     name: string;
     motd: string;
+    extensions?: Extension[];
 }
 
 export class Server {
@@ -87,69 +89,45 @@ export class Server {
             const newPlayer = new Player(socket, socket.data, identification.username);
             this.players.set(newPlayer.id, newPlayer);
 
-            newPlayer.sendPacket(ServerIdentification.serialize({
-                protocolVersion: 0x07,
-                serverName: this.options.name,
-                serverMotd: this.options.motd,
-                userType: newPlayer.userType,
-            }));
-
-            newPlayer.sendPacket(LevelInitialize.serialize({}));
-
-            const worldData = this.world.getCompressedData();
-            for (let i = 0; i < worldData.length; i += 1024) {
-                const chunk = worldData.slice(i, Math.min(i + 1024, worldData.length));
-                newPlayer.sendPacket(LevelDataChunk.serialize({
-                    chunkData: chunk,
-                    chunkLength: chunk.length,
-                    percentComplete: (i + chunk.length) / worldData.length,
-                }));
+            if (identification.padding === 0x42) {;
+                this.handleExtendedLogin(newPlayer);
+            } else {
+                this.handleLogin(newPlayer);
             }
-
-            newPlayer.sendPacket(LevelFinalize.serialize({ sizeX: 256, sizeY: 256, sizeZ: 256 }));
-
-            newPlayer.x = (256 / 2) * 32;
-            newPlayer.z = (256 / 2) * 32;
-            newPlayer.y = 2 * 32;
-
-            for (const otherPlayer of this.players.values()) {
-                if (otherPlayer !== newPlayer) {
-                    newPlayer.sendPacket(SpawnPlayer.serialize({
-                        playerId: otherPlayer.id,
-                        username: otherPlayer.username,
-                        x: otherPlayer.x,
-                        y: otherPlayer.y,
-                        z: otherPlayer.z,
-                        yaw: otherPlayer.yaw,
-                        pitch: otherPlayer.pitch,
-                    }));
-                    otherPlayer.sendPacket(SpawnPlayer.serialize({
-                        playerId: newPlayer.id,
-                        username: newPlayer.username,
-                        x: newPlayer.x,
-                        y: newPlayer.y,
-                        z: newPlayer.z,
-                        yaw: newPlayer.yaw,
-                        pitch: newPlayer.pitch,
-                    }));
-                }
-            }
-
-            newPlayer.sendPacket(PositionAndOrientation.serialize({
-                playerId: -1,
-                x: newPlayer.x,
-                y: newPlayer.y,
-                z: newPlayer.z,
-                yaw: newPlayer.yaw,
-                pitch: newPlayer.pitch,
-            }));
-
-            this.sendPacketToAll(Message.serialize({ playerId: -1, message: `${newPlayer.username} has joined the game` }));
-
             return;
         }
 
-        if (SetBlockC2S.isValid(data)) {
+        console.log(`Received ${data.byteLength}`);
+
+        let byteOffset = 0;
+        let numPackets = 0;
+        while (byteOffset < data.byteLength) {
+            const bytesRead = this.handleSinglePacket(player, socket, data.subarray(byteOffset));
+            if (bytesRead === 0) {
+                break;
+            }
+            byteOffset += bytesRead;
+            numPackets++;
+        }
+        console.log(`Handled ${numPackets} packets`);
+    }
+
+    private handleSinglePacket(player: Player, socket: Bun.Socket<number>, data: Buffer): number {
+        if (ExtInfo.isValid(data)) {
+            const packet = ExtInfo.deserialize(data)!;
+            console.log(packet);
+
+            return ExtInfo.packetSize;
+        }
+
+        else if (ExtEntry.isValid(data)) {
+            const packet = ExtEntry.deserialize(data)!;
+            console.log(packet);
+
+            return ExtEntry.packetSize;
+        }
+
+        else if (SetBlockC2S.isValid(data)) {
             const packet = SetBlockC2S.deserialize(data)!;
 
             let blockType = packet.blockType as Block;
@@ -164,9 +142,11 @@ export class Server {
                 z: packet.z,
                 blockType: blockType,
             }));
+
+            return SetBlockC2S.packetSize;
         }
 
-        if (PositionAndOrientation.isValid(data)) {
+        else if (PositionAndOrientation.isValid(data)) {
             const packet = PositionAndOrientation.deserialize(data)!;
             player.x = packet.x;
             player.y = packet.y;
@@ -182,13 +162,97 @@ export class Server {
                 yaw: packet.yaw,
                 pitch: packet.pitch,
             }), player);
+
+            return PositionAndOrientation.packetSize;
         }
 
-        if (Message.isValid(data)) {
+        else if (Message.isValid(data)) {
             const packet = Message.deserialize(data)!;
             this.sendPacketToAll(Message.serialize({
                 playerId: player.id,
                 message: `<${player.username}> ${packet.message}`,
+            }));
+
+            return Message.packetSize;
+        }
+
+        console.log("Unknown packet:", data);
+        return 0;
+    }
+
+    private handleLogin(player: Player): void {
+        player.sendPacket(ServerIdentification.serialize({
+            protocolVersion: 0x07,
+            serverName: this.options.name,
+            serverMotd: this.options.motd,
+            userType: player.userType,
+        }));
+
+        player.sendPacket(LevelInitialize.serialize({}));
+
+        const worldData = this.world.getCompressedData();
+        for (let i = 0; i < worldData.length; i += 1024) {
+            const chunk = worldData.slice(i, Math.min(i + 1024, worldData.length));
+            player.sendPacket(LevelDataChunk.serialize({
+                chunkData: chunk,
+                chunkLength: chunk.length,
+                percentComplete: (i + chunk.length) / worldData.length,
+            }));
+        }
+
+        player.sendPacket(LevelFinalize.serialize({ sizeX: 256, sizeY: 256, sizeZ: 256 }));
+
+        player.x = (256 / 2) * 32;
+        player.z = (256 / 2) * 32;
+        player.y = 2 * 32;
+
+        for (const otherPlayer of this.players.values()) {
+            if (otherPlayer !== player) {
+                player.sendPacket(SpawnPlayer.serialize({
+                    playerId: otherPlayer.id,
+                    username: otherPlayer.username,
+                    x: otherPlayer.x,
+                    y: otherPlayer.y,
+                    z: otherPlayer.z,
+                    yaw: otherPlayer.yaw,
+                    pitch: otherPlayer.pitch,
+                }));
+                otherPlayer.sendPacket(SpawnPlayer.serialize({
+                    playerId: player.id,
+                    username: player.username,
+                    x: player.x,
+                    y: player.y,
+                    z: player.z,
+                    yaw: player.yaw,
+                    pitch: player.pitch,
+                }));
+            }
+        }
+
+        player.sendPacket(PositionAndOrientation.serialize({
+            playerId: -1,
+            x: player.x,
+            y: player.y,
+            z: player.z,
+            yaw: player.yaw,
+            pitch: player.pitch,
+        }));
+
+        this.sendPacketToAll(Message.serialize({ playerId: -1, message: `${player.username} has joined the game` }));
+    }
+
+    private handleExtendedLogin(player: Player): void {
+        const extensions = this.options.extensions ?? [];    
+    
+        player.sendPacket(ExtInfo.serialize({
+            appName: "pistonlite",
+            extensionCount: extensions.length,
+        }));
+        
+        for (const extension of extensions) {
+            player.sendPacket(ExtEntry.serialize({
+                name: extension.name,
+                version: extension.version,
             }));
         }
     }
@@ -204,6 +268,9 @@ export class Player {
     public yaw: number = 0;
     public pitch: number = 0;
     public lastPing: number = 0;
+
+    public extensionCount: number = 0;
+    public readonly extensions: string[] = [];
 
     public get userType(): 0x00 | 0x64 {
         return this._userType;

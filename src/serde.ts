@@ -91,8 +91,21 @@ export function leveldata(): Field<Uint8Array> {
     };
 }
 
+export function int32(): Field<number> {
+    return {
+        size: 4,
+        serialize: (buffer: Buffer, offset: number, value: number): void => {
+            buffer.writeInt32BE(value, offset);
+        },
+        deserialize: (buffer: Buffer, offset: number): number => {
+            return buffer.readInt32BE(offset);
+        },
+    };
+}
+
 interface Packet<T extends FieldRecord> {
     readonly id: number;
+    readonly packetSize: number;
     serialize(data: InferPacketModel<T>): Buffer;
     deserialize(buffer: Buffer): InferPacketModel<T> | null;
     isValid(buffer: Buffer): boolean;
@@ -111,6 +124,7 @@ export function definePacket<T extends FieldRecord>(id: number, model: T): Packe
 
     return {
         id,
+        packetSize,
         serialize: (data: InferPacketModel<T>): Buffer => {
             const buffer = Buffer.alloc(packetSize);
             buffer.writeUInt8(id, 0);
@@ -122,7 +136,7 @@ export function definePacket<T extends FieldRecord>(id: number, model: T): Packe
             return buffer;
         },
         deserialize: (buffer: Buffer): InferPacketModel<T> | null => {
-            if (buffer.length !== packetSize) {
+            if (buffer.length < packetSize) {
                 return null;
             }
             if (buffer.readUInt8(0) !== id) {
@@ -137,7 +151,7 @@ export function definePacket<T extends FieldRecord>(id: number, model: T): Packe
             return result as InferPacketModel<T>;
         },
         isValid: (buffer: Buffer): boolean => {
-            return buffer.length === packetSize && buffer.readUInt8(0) === id;
+            return buffer.length >= packetSize && buffer.readUInt8(0) === id;
         },
     };
 }
