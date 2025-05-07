@@ -97,8 +97,6 @@ export class Server {
             return;
         }
 
-        console.log(`Received ${data.byteLength}`);
-
         let byteOffset = 0;
         let numPackets = 0;
         while (byteOffset < data.byteLength) {
@@ -115,15 +113,16 @@ export class Server {
     private handleSinglePacket(player: Player, socket: Bun.Socket<number>, data: Buffer): number {
         if (ExtInfo.isValid(data)) {
             const packet = ExtInfo.deserialize(data)!;
-            console.log(packet);
-
+            player.extensionCount = packet.extensionCount;
             return ExtInfo.packetSize;
         }
 
         else if (ExtEntry.isValid(data)) {
             const packet = ExtEntry.deserialize(data)!;
-            console.log(packet);
-
+            player.extensions.push(packet.name);
+            if (player.extensions.length === player.extensionCount) {
+                this.handleLogin(player);
+            }
             return ExtEntry.packetSize;
         }
 
@@ -176,7 +175,6 @@ export class Server {
             return Message.packetSize;
         }
 
-        console.log("Unknown packet:", data);
         return 0;
     }
 
